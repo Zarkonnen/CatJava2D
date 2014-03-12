@@ -2,7 +2,6 @@ package com.zarkonnen.catengine;
 
 import com.zarkonnen.catengine.util.Clr;
 import com.zarkonnen.catengine.util.Pt;
-import com.zarkonnen.catengine.util.Rect;
 import com.zarkonnen.catengine.util.ScreenMode;
 import java.awt.Canvas;
 import java.awt.Color;
@@ -19,6 +18,9 @@ import java.awt.event.KeyListener;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
 import java.awt.event.MouseMotionListener;
+import java.awt.event.MouseWheelEvent;
+import java.awt.event.MouseWheelListener;
+import java.awt.geom.AffineTransform;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.WritableRaster;
@@ -28,10 +30,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
+import java.util.List;
 import javax.imageio.ImageIO;
 import javax.swing.JFrame;
 
-public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMotionListener {
+public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMotionListener, MouseWheelListener {
 	Game g;
 	String winTitle;
 	final String loadBase;
@@ -48,6 +51,7 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 	boolean quitted = false;
 	boolean cursorVisible = true;
 	LinkedList<Long> frameIntervalWindow = new LinkedList<Long>();
+	ExceptionHandler eh;
 
 	public Java2DEngine(String winTitle, String loadBase, String soundLoadBase, Integer frameRate) {
 		this.winTitle = winTitle;
@@ -71,11 +75,13 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 				frameIntervalWindow.removeFirst();
 			}
 		}
-		lastFrame = System.nanoTime();
+		long timeNow = System.nanoTime();
+		int msPassed = (int) ((timeNow - lastFrame) / 1000000);
+		lastFrame = timeNow;
 		Java2DEngine.InputFrame f;
 		synchronized (this) {
 			f = inputFrame;
-			inputFrame = new Java2DEngine.InputFrame();
+			inputFrame = new Java2DEngine.InputFrame(msPassed);
 			inputFrame.mouse = f.mouse;
 			inputFrame.keyDowns = new HashSet<String>(f.keyDowns);
 		}
@@ -85,7 +91,7 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 	@Override
 	public void setup(Game g) {
 		this.g = g;
-		inputFrame = new Java2DEngine.InputFrame();
+		inputFrame = new Java2DEngine.InputFrame(0);
 		gameFrame = new JFrame(winTitle);
 		gameFrame.setIgnoreRepaint(true);
 		gameFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -122,10 +128,24 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 		}
 	}
 
+	@Override
+	public void setExceptionHandler(ExceptionHandler h) {
+		eh = h;
+	}
+
 	static class InputFrame {
+		private char lastInputChar;
+		private String lastKey;
+		InputFrame(int ms) {
+			this.ms = ms;
+		}
+		
+		int ms;
 		Point mouse = new Point(0, 0);
+		Point mouseDown = null;
 		Point click = null;
 		int button;
+		int scroll;
 		HashSet<String> keyDowns = new HashSet<String>();
 		HashSet<String> keyPresseds = new HashSet<String>();
 	}
@@ -165,11 +185,6 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 		@Override
 		public Pt cursor() {
 			return new Pt(input.mouse.x, input.mouse.y);
-		}
-		
-		@Override
-		public Pt click() {
-			return input.click == null ? null : new Pt(input.click.x, input.click.y);
 		}
 
 		@Override
@@ -253,7 +268,7 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 		}
 
 		@Override
-		public Rect rect(Clr c, double x, double y, double width, double height, double angle) {
+		public void rect(Clr c, double x, double y, double width, double height, double angle) {
 			g.setColor(new Color(c.r, c.g, c.b, c.a));
 			if (angle == 0) {
 				g.fill(new Rectangle2D.Double(x, y, width, height));
@@ -264,13 +279,12 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 				g.rotate(-angle);
 				g.translate(-x, -y);
 			}
-			return new Rect(x, y, width, height);
 		}
 
 		@Override
-		public Rect blit(String img, Clr tint, double x, double y, double width, double height, double angle) {
+		public void blit(Img img, Clr tint, double alpha, double x, double y, double width, double height, double angle) {
 			BufferedImage image = getImage(img, tint);
-			if (image == null) { return null; }
+			if (image == null) { return; }
 			g.translate(x, y);
 			if (angle != 0) { g.rotate(angle); }
 			if (width == 0 && height == 0) {
@@ -280,7 +294,6 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 			}
 			if (angle != 0) { g.rotate(-angle); }
 			g.translate(-x, -y);
-			return new Rect(x, y, width == 0 ? image.getWidth() : width, height == 0 ? image.getHeight() : height);
 		}
 
 		@Override
@@ -314,14 +327,153 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 		}
 
 		@Override
-		public void playMusic(String music, double volume, MusicDone callback) {
+		public void stopMusic() {
 			// qqDPS TODO
 		}
 
 		@Override
-		public void stopMusic() {
-			// qqDPS TODO
+		public Object nativeRenderer() {
+			return g;
 		}
+
+		@Override
+		public double getWidth(Img img) {
+			return getImage(img, null).getWidth();
+		}
+
+		@Override
+		public double getHeight(Img img) {
+			return getImage(img, null).getHeight();
+		}
+
+		@Override
+		public void shift(double dx, double dy) {
+			g.translate(dx, dy);
+		}
+
+		@Override
+		public void scale(double xScale, double yScale) {
+			g.scale(xScale, yScale);
+		}
+
+		@Override
+		public void rotate(double angle) {
+			g.rotate(angle);
+		}
+
+		@Override
+		public void resetTransforms() {
+			g.setTransform(AffineTransform.getTranslateInstance(0, 0));
+		}
+
+		@Override
+		public String lastKeyPressed() {
+			return input.lastKey;
+		}
+
+		@Override
+		public char lastInput() {
+			return input.lastInputChar;
+		}
+
+		@Override
+		public Pt mouseDown() {
+			return input.mouseDown == null ? null : new Pt(input.mouseDown.x, input.mouseDown.y);
+		}
+
+		@Override
+		public Pt clicked() {
+			return input.click == null ? null : new Pt(input.click.x, input.click.y);
+		}
+
+		@Override
+		public int scrollAmount() {
+			return input.scroll;
+		}
+
+		@Override
+		public int msDelta() {
+			return input.ms;
+		}
+
+		@Override
+		public void preload(List<Img> images) {
+			// Ignored.
+		}
+
+		@Override
+		public void preloadSounds(List<String> sounds) {
+			// Audio not implemented.
+		}
+
+		@Override
+		public void playMusic(String music, double volume, MusicCallback startedCallback, MusicCallback doneCallback) {
+			// Audio not implemented.
+		}
+	}
+	
+	BufferedImage getImage(Img img, Clr tint) {
+		return getImage(img.src, img.srcX, img.srcY, img.srcWidth, img.srcHeight, img.flipped, tint);
+	}
+	
+	BufferedImage getImage(String src, int srcX, int srcY, int srcW, int srcH, boolean flipped, Clr tint) {
+		if (tint == null) {
+			return getImage(src, srcX, srcY, srcW, srcH, flipped);
+		}
+		String key = src + "/" + srcX + "/" + srcY + "/" + srcW + "/" + srcH + "/" + flipped + "/" + tint.toString();
+		if (images.containsKey(key)) {
+			SoftReference<BufferedImage> ref = images.get(key);
+			BufferedImage img = ref.get();
+			if (img != null) { return img; }
+		}
+		BufferedImage srcImg = getImage(src, srcX, srcY, srcW, srcH, flipped);
+		if (srcImg == null) { return null; }
+		BufferedImage img = tint(srcImg, new Color(tint.r, tint.g, tint.b, tint.a));
+		images.put(key, new SoftReference<BufferedImage>(img));
+		return img;
+	}
+	
+	BufferedImage getImage(String src, int srcX, int srcY, int srcW, int srcH, boolean flipped) {
+		if ((srcW == 0 || srcH == 0) && !flipped) {
+			return getImage(src);
+		}
+		String key = src + "/" + srcX + "/" + srcY + "/" + srcW + "/" + srcH + "/" + flipped;
+		if (images.containsKey(key)) {
+			SoftReference<BufferedImage> ref = images.get(key);
+			BufferedImage img = ref.get();
+			if (img != null) { return img; }
+		}
+		BufferedImage srcImg = getImage(src);
+		if (srcImg == null) { return null; }
+		if (srcW == 0) {
+			srcW = srcImg.getWidth();
+		}
+		if (srcH == 0) {
+			srcH = srcImg.getHeight();
+		}
+		BufferedImage img = createImage(srcW, srcH, Transparency.TRANSLUCENT);
+		Graphics2D g = img.createGraphics();
+		if (flipped) {
+			g.transform(AffineTransform.getScaleInstance(-1, 1));
+		}
+		g.drawImage(srcImg, 0, 0, srcW, srcH, srcX, srcY, srcH, srcH, null);
+		images.put(key, new SoftReference<BufferedImage>(img));
+		return img;
+	}
+	
+	BufferedImage getImage(String name) {
+		String key = name;
+		if (images.containsKey(key)) {
+			SoftReference<BufferedImage> ref = images.get(key);
+			BufferedImage img = ref.get();
+			if (img != null) { return img; }
+		}
+		BufferedImage img = readImage(name);
+		if (img == null) {
+			return null;
+		}
+		images.put(key, new SoftReference<BufferedImage>(img));
+		return img;
 	}
 	
 	BufferedImage getImage(String name, Clr tint) {
@@ -420,6 +572,7 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 	public synchronized void keyPressed(KeyEvent ke) {
 		inputFrame.keyDowns.add(KeyEvent.getKeyText(ke.getKeyCode()));
 		inputFrame.keyPresseds.add(KeyEvent.getKeyText(ke.getKeyCode()));
+		inputFrame.lastKey = KeyEvent.getKeyText(ke.getKeyCode());
 	}
 	
 	@Override
@@ -429,12 +582,14 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 
 	@Override
 	public synchronized void mousePressed(MouseEvent me) {
-		inputFrame.click = me.getPoint();
+		inputFrame.mouseDown = me.getPoint();
 		inputFrame.button = me.getButton();
 	}
 	
 	@Override
-	public void keyTyped(KeyEvent ke) {}
+	public void keyTyped(KeyEvent ke) {
+		inputFrame.lastInputChar = ke.getKeyChar();
+	}
 
 	@Override
 	public void keyReleased(KeyEvent ke) {
@@ -442,7 +597,9 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 	}
 
 	@Override
-	public void mouseClicked(MouseEvent me) {}
+	public void mouseClicked(MouseEvent me) {
+		inputFrame.click = me.getPoint();
+	}
 
 	@Override
 	public void mouseReleased(MouseEvent me) {}
@@ -456,5 +613,10 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 	@Override
 	public void mouseDragged(MouseEvent me) {
 		inputFrame.mouse = me.getPoint();
+	}
+	
+	@Override
+	public void mouseWheelMoved(MouseWheelEvent mwe) {
+		inputFrame.scroll = mwe.getScrollAmount();
 	}
 }
