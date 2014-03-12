@@ -26,6 +26,7 @@ import java.awt.image.BufferedImage;
 import java.awt.image.WritableRaster;
 import java.io.InputStream;
 import java.lang.ref.SoftReference;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -52,12 +53,32 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 	boolean cursorVisible = true;
 	LinkedList<Long> frameIntervalWindow = new LinkedList<Long>();
 	ExceptionHandler eh;
+	
+	private static final String[] KEY_CODE_NAMES = new String[600];
+	static {
+		for (Field field : KeyEvent.class.getFields()) {
+			if (field.getName().startsWith("VK_")) {
+				String name = field.getName().substring(3);
+				try {
+					int value = field.getInt(null);
+					if (value >= 0 && value < KEY_CODE_NAMES.length) {
+						KEY_CODE_NAMES[value] = name;
+					}
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
+			}
+		}
+	}
 
 	public Java2DEngine(String winTitle, String loadBase, String soundLoadBase, Integer frameRate) {
 		this.winTitle = winTitle;
 		this.loadBase = loadBase;
 		this.soundLoadBase = soundLoadBase;
 		this.msPerFrame = 1000 / frameRate;
+		System.setProperty("sun.java2d.opengl","True");
+		System.setProperty("apple.awt.graphics.UseQuartz","true");
+		System.setProperty("apple.awt.graphics.EnableQ2DX","true");
 	}
 
 	private Java2DEngine.MyFrame next() {
@@ -413,6 +434,12 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 	}
 	
 	BufferedImage getImage(Img img, Clr tint) {
+		if (tint == null) {
+			if (img.machineImgCache == null) {
+				img.machineImgCache = getImage(img.src, img.srcX, img.srcY, img.srcWidth, img.srcHeight, img.flipped);
+			}
+			return (BufferedImage) img.machineImgCache;
+		}
 		return getImage(img.src, img.srcX, img.srcY, img.srcWidth, img.srcHeight, img.flipped, tint);
 	}
 	
@@ -456,7 +483,7 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 		if (flipped) {
 			g.transform(AffineTransform.getScaleInstance(-1, 1));
 		}
-		g.drawImage(srcImg, 0, 0, srcW, srcH, srcX, srcY, srcH, srcH, null);
+		g.drawImage(srcImg, 0, 0, srcW, srcH, srcX, srcY, srcX + srcW, srcY + srcH, null);
 		images.put(key, new SoftReference<BufferedImage>(img));
 		return img;
 	}
@@ -570,9 +597,16 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 
 	@Override
 	public synchronized void keyPressed(KeyEvent ke) {
-		inputFrame.keyDowns.add(KeyEvent.getKeyText(ke.getKeyCode()));
-		inputFrame.keyPresseds.add(KeyEvent.getKeyText(ke.getKeyCode()));
-		inputFrame.lastKey = KeyEvent.getKeyText(ke.getKeyCode());
+		inputFrame.keyDowns.add(getKeyText(ke.getKeyCode()));
+		inputFrame.keyPresseds.add(getKeyText(ke.getKeyCode()));
+		inputFrame.lastKey = getKeyText(ke.getKeyCode());
+	}
+	
+	public String getKeyText(int keyCode) {
+		if (keyCode >= 0 && keyCode < KEY_CODE_NAMES.length && KEY_CODE_NAMES[keyCode] != null) {
+			return KEY_CODE_NAMES[keyCode];
+		}
+		return KeyEvent.getKeyText(keyCode);
 	}
 	
 	@Override
@@ -593,12 +627,13 @@ public class Java2DEngine implements Engine, KeyListener, MouseListener, MouseMo
 
 	@Override
 	public void keyReleased(KeyEvent ke) {
-		inputFrame.keyDowns.remove(KeyEvent.getKeyText(ke.getKeyCode()));
+		inputFrame.keyDowns.remove(getKeyText(ke.getKeyCode()));
 	}
 
 	@Override
 	public void mouseClicked(MouseEvent me) {
 		inputFrame.click = me.getPoint();
+		inputFrame.button = me.getButton();
 	}
 
 	@Override
